@@ -10,25 +10,26 @@
 
 ## 🏛 Архитектура
 
-  * **Modular Monolith:** Приложение едино, но четко разделено на модули (`telemetry`, `device_management`), которые общаются через Java-интерфейсы.
+  * **Modular Monolith:** Приложение едино, но четко разделено на бизнес-модули (`telemetry`, `device_management`), которые общаются через Java-интерфейсы.
   * **Hybrid State Management:**
-      * **Горячие данные (Real-time):** Статусы (`online`/`offline`), текущая температура и временные токены хранятся в **RAM** (`ConcurrentHashMap`). Это обеспечивает мгновенный отклик.
-      * **Холодные данные (Persistence):** Данные синхронизируются в **PostgreSQL** асинхронно (Write-Behind) или при критических изменениях (регистрация/блокировка).
+      * **Горячие данные (Real-time):** Статусы (`online`/`offline`), текущая телеметрия и временные токены привязки хранятся в **RAM** (`ConcurrentHashMap`). Это обеспечивает мгновенный отклик (O(1)).
+      * **Холодные данные (Persistence):** Данные синхронизируются в **PostgreSQL** асинхронно (фоновый процесс) или синхронно при критических изменениях (регистрация/блокировка).
   * **Security First:**
-      * Весь трафик устройств шифруется **AES-GCM**.
-      * Устройства аутентифицируются по `ChipId` + Белый список (Cache).
-      * Привязка к пользователю через временные **OTP-токены**.
+      * **Traffic:** Весь трафик устройств шифруется **AES-128 (GCM)**.
+      * **Device Auth:** Аутентификация по `ChipId` + Белый список в оперативной памяти (`DeviceAuthCache`).
+      * **User Binding:** Привязка через временные одноразовые **OTP-токены** (без передачи ChipId пользователю).
+      * **Admin Access:** Защита административных эндпоинтов через API Key (`X-Admin-Key`).
 
 -----
 
 ## 🛠 Технологический стек
 
   * **Core:** Java 21, Spring Boot 3.4.x.
-  * **Database:** PostgreSQL 15 (используется `JSONB` для гибкости).
-  * **Protocol:**
-      * **WebSocket (Text):** Обмен зашифрованными Base64-строками с устройствами.
+  * **Database:** PostgreSQL 15 (используется `JSONB` для гибкости данных).
+  * **Protocols:**
+      * **WebSocket (Secure Text):** Обмен зашифрованными Base64-строками с устройствами.
       * **HTTP REST:** API для Telegram-бота и администрирования.
-  * **Security:** AES-128 (GCM), In-Memory Token Store.
+  * **Testing:** JUnit 5, Mockito, Spring Boot Test, Testcontainers.
 
 -----
 
@@ -40,35 +41,37 @@ src/main/java/com/blinkoff/iot
 │
 ├── shared                              // 🧱 ОБЩЕЕ ЯДРО
 │   ├── config
-│   │   ├── AppConstants.java           // Лимиты (10 устр/юзер)
+│   │   ├── AppConstants.java           // Лимиты (Max 10 устройств/юзер)
+│   │   ├── WebConfig.java              // 🔥 Регистрация Interceptors
 │   │   └── WebSocketConfig.java        // Настройка /ws/device
-│   ├── exception                       // Глобальная обработка ошибок (400, 404, 500)
+│   ├── exception                       // Глобальная обработка (ApiError, InvalidTokenException)
 │   └── security
+│       ├── AdminAuthInterceptor.java   // 🔥 Защита админских ручек (X-Admin-Key)
 │       └── crypto                      // AesCryptoEngine (Логика шифрования)
 │
 └── modules                             // 📦 БИЗНЕС-МОДУЛИ
     │
     ├── device_management               // 🛠 УПРАВЛЕНИЕ (CRUD, API)
-    │   ├── controller                  // REST API (Endpoints)
+    │   ├── controller                  // REST API (Provisioning, Binding, Data)
     │   ├── service                     // Бизнес-логика
-    │   │   ├── DeviceProvisioningService.java  // Регистрация, Блокировка
+    │   │   ├── DeviceProvisioningService.java  // Регистрация, Блокировка/Разблокировка
     │   │   ├── DeviceBindingService.java       // Привязка (обмен Token -> ChipId)
-    │   │   └── DeviceDataService.java          // Сборка DTO (RAM + DB override)
+    │   │   └── DeviceDataService.java          // Сборка DTO (RAM + DB + Name Override)
     │   ├── store
-    │   │   └── ProvisioningTokenStore.java     // ⚡ RAM: Временные токены привязки
-    │   ├── dto                         // JSON объекты (Request/Response)
+    │   │   └── ProvisioningTokenStore.java     // ⚡ RAM: Временные токены (TTL 5 мин)
+    │   ├── dto                         // Request/Response (JSON)
     │   ├── model                       // Entity: Device, DeviceBinding
     │   └── repository                  // Spring Data JPA
     │
     └── telemetry                       // 🌡 ТЕЛЕМЕТРИЯ (Real-time)
         ├── api
         │   └── device_facing           // WebSocket слой
-        │       ├── DeviceHandler.java              // Прием сообщений, Дешифровка, Обновление RAM
+        │       ├── DeviceHandler.java              // Прием, Дешифровка, Обновление RAM
         │       └── DeviceHandshakeInterceptor.java // Проверка Header X-Chip-Id + AuthCache
         ├── service
-        │   └── DeviceAuthCache.java    // ⚡ RAM: Белый список активных устройств
+        │   └── DeviceAuthCache.java    // ⚡ RAM: Белый список (Set<String>)
         ├── store
-        │   └── InMemoryStateStore.java // ⚡ RAM: Текущее состояние (params, lastSeen)
+        │   └── InMemoryStateStore.java // ⚡ RAM: Состояние (params, lastSeen, status)
         ├── engine
         │   └── StateSyncService.java   // 🕰 Фоновая синхронизация RAM -> DB
         ├── model                       // Entity: DeviceState
@@ -76,112 +79,102 @@ src/main/java/com/blinkoff/iot
 ```
 
 -----
-## 🧪 Текущая Архитектура Тестов
+
+## 🧪 Архитектура Тестов
+
 ```text
 src/test/java/com/blinkoff/iot
 ├── shared
 │   └── security
+│       ├── AdminAuthInterceptorTest.java      // ✅ UNIT: Проверка доступа по ключу.
 │       └── crypto
-│           └── AesCryptoEngineTest.java           // ✅ UNIT: Проверка шифрования и дешифровки (AES-GCM).
+│           └── AesCryptoEngineTest.java       // ✅ UNIT: AES-GCM шифрование.
 │
 └── modules
     ├── device_management
     │   ├── service
-    │   │   ├── DeviceProvisioningServiceTest.java // ✅ UNIT: Логика регистрации, блокировка, чистка кэша.
-    │   │   ├── DeviceBindingServiceTest.java      // ✅ UNIT: Логика привязки (Токены, Лимиты, Дубликаты).
-    │   │   └── DeviceDataServiceTest.java         // ✅ UNIT: Сборка данных (приоритет RAM, Fallback DB, имена из JSON).
+    │   │   ├── DeviceProvisioningServiceTest.java // ✅ UNIT: Provision, Block, Unblock.
+    │   │   ├── DeviceBindingServiceTest.java      // ✅ UNIT: Token Exchange, Limits.
+    │   │   └── DeviceDataServiceTest.java         // ✅ UNIT: RAM Priority, Name Override.
     │   ├── store
-    │   │   └── ProvisioningTokenStoreTest.java    // ✅ UNIT: Работа с RAM-токенами (TTL, одноразовость).
+    │   │   └── ProvisioningTokenStoreTest.java    // ✅ UNIT: Token Creation/Consumption.
     │   ├── controller
-    │   │   └── DeviceProvisioningControllerTest.java // ✅ WEB: Проверка HTTP-кодов (201, 200, 404) и JSON-ответов.
+    │   │   └── DeviceProvisioningControllerTest.java // ✅ WEB: HTTP Codes (201, 200, 403).
     │   ├── repository
-    │   │   ├── DeviceRepositoryTest.java          // 🐢 INTEG (Testcontainers): Сохранение/Поиск JSONB.
-    │   │   └── DeviceBindingRepositoryTest.java   // 🐢 INTEG (Testcontainers): Проверка constraints БД.
+    │   │   ├── DeviceRepositoryTest.java          // 🐢 INTEG: JSONB queries.
+    │   │   └── DeviceBindingRepositoryTest.java   // 🐢 INTEG: Constraints.
     │
     └── telemetry
         ├── api
         │   └── device_facing
-        │       └── DeviceHandlerTest.java         // ✅ UNIT: WebSocket логика (Connect -> Decrypt -> RAM -> Disconnect).
+        │       └── DeviceHandlerTest.java         // ✅ UNIT: WS Connect/Disconnect flow.
         ├── engine
-        │   └── StateSyncServiceTest.java          // ✅ UNIT: Прогрев кэша и фоновая запись в БД.
+        │   └── StateSyncServiceTest.java          // ✅ UNIT: Cache Warmup & Sync.
         └── repository
-            └── DeviceStateRepositoryTest.java     // 🐢 INTEG (Testcontainers): CRUD состояний.
+            └── DeviceStateRepositoryTest.java     // 🐢 INTEG: CRUD operations.
 ```
 
 -----
 
-## 🤝 Как классы взаимодействуют (Interaction Flow)
+## 🔄 Сценарии Взаимодействия (Interaction Flows)
 
-### 1\. Подключение устройства (Handshake & Auth)
+### 1\. Подключение устройства (Device Connection)
 
-1.  **ESP32** стучится по WebSocket с заголовком `X-Chip-Id`.
-2.  `DeviceHandshakeInterceptor` смотрит в `DeviceAuthCache` (RAM).
-      * Если ID там нет (устройство заблокировано или не существует) — **разрыв соединения**.
-      * Если ID есть — пропускает дальше.
-3.  `DeviceHandler` устанавливает статус `isOnline = true` в `InMemoryStateStore`.
+1.  **Handshake:** ESP32 подключается к `ws://...` с заголовком `X-Chip-Id`.
+2.  **Auth:** `DeviceHandshakeInterceptor` проверяет наличие ID в `DeviceAuthCache` (RAM).
+      * *Есть:* Пускает.
+      * *Нет (или Blocked):* 403 Forbidden / Разрыв.
+3.  **Status:** `DeviceHandler` ставит флаг `isOnline = true` в `InMemoryStateStore`.
 
-### 2\. Получение данных (Telemetry)
+### 2\. Телеметрия и Имена (Telemetry & Naming Strategy)
 
-1.  **ESP32** шлет зашифрованную строку (Base64).
-2.  `DeviceHandler` использует `AesCryptoEngine` для дешифровки.
-3.  Полученный JSON кладется в `InMemoryStateStore` (перезаписывая старый).
-4.  `StateSyncService` (по таймеру раз в 10 сек) берет данные из `InMemoryStateStore` и сохраняет в PostgreSQL (`DeviceStateRepository`).
+1.  **Payload:** ESP32 шлет `AES({"temp": 24.5, "name": "My Incubator"})`.
+2.  **Process:** Сервер дешифрует и кладет JSON в RAM.
+3.  **Name Resolution:** При запросе списка устройств (`/api/devices`):
+      * Сервис смотрит в RAM. Если в JSON есть поле `name`, используется оно.
+      * Если в RAM пусто или нет имени — берется "Заводское имя" из PostgreSQL (`devices` table).
 
-### 3\. Привязка пользователя (User Binding)
+### 3\. Привязка пользователя (User Provisioning)
 
-1.  **Админ** дергает API: `DeviceProvisioningService` -\> `ProvisioningTokenStore`. Создается токен (на 5 мин).
-2.  **Пользователь** шлет токен Боту. Бот шлет его в API.
-3.  `DeviceBindingService`:
-      * Проверяет токен в `ProvisioningTokenStore`.
-      * Получает реальный `ChipId`.
-      * Проверяет лимиты и статус `isActive`.
-      * Создает запись в `DeviceBindingRepository`.
-
-### 4\. Чтение данных ботом (Data Read)
-
-1.  **Бот** запрашивает `/api/devices`.
-2.  `DeviceDataService`:
-      * Берет список ID из `DeviceBindingRepository`.
-      * Проверяет `DeviceAuthCache` (не заблокировано ли?).
-      * Берет данные из `InMemoryStateStore`.
-      * **Фишка:** Если в RAM пришло поле `name`, оно заменяет заводское имя из БД.
-      * Отдает готовый `DeviceSummaryDto`.
+1.  **Generate:** Админ (с ключом `X-Admin-Key`) вызывает `POST /token`. Сервер генерирует UUID (хранится в RAM 5 мин).
+2.  **Input:** Пользователь отправляет UUID боту. Бот вызывает `POST /bindings`.
+3.  **Bind:** Сервер:
+      * Проверяет UUID в `ProvisioningTokenStore`.
+      * Находит скрытый `ChipId`.
+      * Проверяет статус (`isActive`) и лимиты.
+      * Создает связь в БД.
 
 -----
 
-## 📡 API Взаимодействия (Server Contract)
+## 📡 API Контракт (Server Interface)
 
-Это спецификация для разработки клиентов (Telegram Bot, Frontend).
+Все запросы возвращают JSON.
 
-### 1\. WebSocket API (Для устройств)
+### 🔐 Security Headers
 
-  * **URL:** `ws://host:8080/ws/device`
-  * **Headers:** `X-Chip-Id: <CHIP-ID>`
-  * **Payload:** Строка Base64 (результат AES-шифрования JSON).
-      * *Пример расшифрованного:* `{"temp": 24.5, "hum": 60, "name": "My Incubator"}`
+  * **Публичные (Бот):** Без защиты (аутентификация через логику `userId` / `token`).
+  * **Административные:** Требуют заголовок `X-Admin-Key: <SECRET>`.
 
-### 2\. HTTP REST API (Для Бота/Админа)
+### 1\. Provisioning (Admin Only 🛡️)
 
-Все запросы возвращают JSON. Ошибки приходят с кодами 4xx/5xx и телом `ApiError`.
-
-#### 🛂 Группа: Provisioning (Административные)
-
-| Метод | URL | Описание |
-| :--- | :--- | :--- |
-| **POST** | `/api/devices/provision` | Создать новое устройство (Завод). Возвращает 201. |
-| **POST** | `/api/devices/{id}/token` | Сгенерировать временный токен для привязки. |
-| **POST** | `/api/devices/{id}/block` | **БАН**. Сбрасывает соединения, чистит кэш, удаляет юзеров. |
-
-#### 🔗 Группа: Bindings (Пользовательские действия)
-
-| Метод | URL | Тело запроса | Описание |
+| Метод | URL | Header | Описание |
 | :--- | :--- | :--- | :--- |
-| **POST** | `/api/bindings` | `{ "token": "...", "userId": "...", "platform": "TELEGRAM" }` | Привязать устройство по токену. |
-| **DELETE** | `/api/bindings` | `?chipId=...&userId=...` | Отвязать устройство. |
+| **POST** | `/api/devices/provision` | `X-Admin-Key` | Регистрация нового устройства. Ответ: **201**. |
+| **POST** | `/api/devices/{id}/token` | `X-Admin-Key` | Генерация токена для привязки. Ответ: `{ "token": "..." }`. |
+| **POST** | `/api/devices/{id}/block` | `X-Admin-Key` | **BLOCK**. `isActive=false`, кик из WS, удаление связей. |
+| **POST** | `/api/devices/{id}/unblock` | `X-Admin-Key` | **UNBLOCK**. `isActive=true`, возврат в WS Whitelist. |
 
-#### 📊 Группа: Data (Данные)
+### 2\. User Actions (Bot / Client)
 
-| Метод | URL | Параметры | Описание |
+| Метод | URL | Body / Params | Описание |
 | :--- | :--- | :--- | :--- |
-| **GET** | `/api/devices` | `?userId=...` | Список устройств пользователя с именами и статусом. |
-| **GET** | `/api/devices/{id}/telemetry` | `?userId=...` | Полный JSON параметров + lastSeen. |
+| **POST** | `/api/bindings` | `{ "token": "uuid", "userId": "tg_1", "platform": "TELEGRAM" }` | Привязка по токену. Ошибки: 404 (Token Invalid), 400 (Limits). |
+| **DELETE** | `/api/bindings` | `?chipId=...&userId=...` | Удаление связи пользователя с устройством. |
+| **GET** | `/api/devices` | `?userId=...` | Список устройств (`DeviceSummaryDto`) с актуальными именами. |
+| **GET** | `/api/devices/{id}/telemetry` | `?userId=...` | Полная телеметрия (`DeviceTelemetryDto`). |
+
+### 3\. WebSocket (Device)
+
+  * **URL:** `/ws/device`
+  * **Header:** `X-Chip-Id: <ID>`
+  * **Body:** Encrypted Base64 String.|

@@ -76,6 +76,39 @@ src/main/java/com/blinkoff/iot
 ```
 
 -----
+## 🧪 Текущая Архитектура Тестов
+```text
+src/test/java/com/blinkoff/iot
+├── shared
+│   └── security
+│       └── crypto
+│           └── AesCryptoEngineTest.java           // ✅ UNIT: Проверка шифрования и дешифровки (AES-GCM).
+│
+└── modules
+    ├── device_management
+    │   ├── service
+    │   │   ├── DeviceProvisioningServiceTest.java // ✅ UNIT: Логика регистрации, блокировка, чистка кэша.
+    │   │   ├── DeviceBindingServiceTest.java      // ✅ UNIT: Логика привязки (Токены, Лимиты, Дубликаты).
+    │   │   └── DeviceDataServiceTest.java         // ✅ UNIT: Сборка данных (приоритет RAM, Fallback DB, имена из JSON).
+    │   ├── store
+    │   │   └── ProvisioningTokenStoreTest.java    // ✅ UNIT: Работа с RAM-токенами (TTL, одноразовость).
+    │   ├── controller
+    │   │   └── DeviceProvisioningControllerTest.java // ✅ WEB: Проверка HTTP-кодов (201, 200, 404) и JSON-ответов.
+    │   ├── repository
+    │   │   ├── DeviceRepositoryTest.java          // 🐢 INTEG (Testcontainers): Сохранение/Поиск JSONB.
+    │   │   └── DeviceBindingRepositoryTest.java   // 🐢 INTEG (Testcontainers): Проверка constraints БД.
+    │
+    └── telemetry
+        ├── api
+        │   └── device_facing
+        │       └── DeviceHandlerTest.java         // ✅ UNIT: WebSocket логика (Connect -> Decrypt -> RAM -> Disconnect).
+        ├── engine
+        │   └── StateSyncServiceTest.java          // ✅ UNIT: Прогрев кэша и фоновая запись в БД.
+        └── repository
+            └── DeviceStateRepositoryTest.java     // 🐢 INTEG (Testcontainers): CRUD состояний.
+```
+
+-----
 
 ## 🤝 Как классы взаимодействуют (Interaction Flow)
 

@@ -68,26 +68,20 @@
 * *Результат:* Если ОК — соединение открыто. Если нет — разрыв (Close Status 4003).
 * **Event:** Core отправляет `CONNECTION_ESTABLISHED` в Kafka.
 
-
 2. **Telemetry (Обработка данных):**
 * Устройство шлет **AES-GCM** шифрованный Payload.
 * **Core:** Дешифрует JSON.
 * **Core (Redis Update):** Обновляет Hash `device:state:{chipId}` (команда `HMSET`):
-* `params`: сырой JSON.
-* `isOnline`: `true`.
-* `lastSeen`: текущий Timestamp (long).
-
-
+    `params`: сырой JSON.
+   `isOnline`: `true`.
+   `lastSeen`: текущий Timestamp (long).
 * **Analysis:** Парсит JSON на наличие ключей `errors` и `events`.
 * Если массив не пуст -> **Kafka Producer** отправляет `DEVICE_ERROR` или `DEVICE_EVENT`.
-
 
 3. **Disconnection (Разрыв):**
 * Если сокет закрыт корректно или по ошибке сети (TCP FIN/RST).
 * **Core:** Ставит `isOnline: false` в Redis.
 * **Event:** Отправляет `CONNECTION_BROKEN` в Kafka.
-
-
 
 ### 🔴 Сценарий Б: Мониторинг "Мертвых душ" (Watchdog)
 
@@ -97,29 +91,19 @@
 2. **Check Loop:** Для каждого `chipId`:
 * Читает состояние из Redis Hash `device:state:{chipId}` (`HMGET`: `isOnline`, `lastSeen`).
 * Вычисляет `silence = now - lastSeen`.
-
-
 3. **Logic:**
 * **Случай 1 (Timeout):** Если `isOnline == true` И `silence > 60 sec`:
-* **Action:** Пишет в Redis `isOnline = false` (`HSET`).
-* **Event:** Шлет в Kafka `CONNECTION_LOST_TIMEOUT`.
-
-
+    **Action:** Пишет в Redis `isOnline = false` (`HSET`).
+    **Event:** Шлет в Kafka `CONNECTION_LOST_TIMEOUT`.
 * **Случай 2 (Still Dead):** Если `isOnline == false` И `silence > 60 sec`:
-* **Action:** Ничего не пишет в Redis (статус уже false).
-* **Event:** Шлет в Kafka `CONNECTION_NOT_FOUND` (Напоминание/Heartbeat ошибки).
-
-
-
-
+    **Action:** Ничего не пишет в Redis (статус уже false).
+    **Event:** Шлет в Kafka `CONNECTION_NOT_FOUND` (Напоминание/Heartbeat ошибки).
 
 ### 🟣 Сценарий В: Маршрутизация Уведомлений (Bot)
 
 1. **Listen:** Бот слушает топик `iot-alarms`.
 2. **Enrich:** Получив ивент с `chipId`, Бот делает HTTP-запрос к Core: `GET /api/devices/{chipId}/owners`.
 * *Важно:* Бот использует системный `X-Admin-Key` для этого запроса.
-
-
 3. **Send:** Core возвращает список `chatId` (например `["12345", "67890"]`). Бот отправляет сообщение каждому.
 
 ---
@@ -164,8 +148,6 @@
 * **Security:**
 * Header при подключении: `X-Chip-Id: <CHIP_ID>`
 * Payload шифрование: **AES-128-GCM** (Shared Key прошит в прошивке).
-
-
 
 ### JSON Structure (Decrypted)
 

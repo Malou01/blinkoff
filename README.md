@@ -178,8 +178,6 @@
 
 ```
 
----
-
 ## 📣 4. Kafka Event Contract
 
 * **Topic:** `iot-alarms`

@@ -10,18 +10,14 @@
 * **Hot Data (RAM):** Текущие параметры, статус `Online/Offline`, `LastSeen` и токены привязки живут в памяти (`ConcurrentHashMap`). Чтение/Запись — O(1).
 * **Cold Data (DB):** Асинхронная синхронизация (Write-Behind) в **PostgreSQL** раз в 10 сек. Восстановление состояния (Rehydration) при рестарте сервера.
 
-
 * **Event-Driven Core:**
 * Все критические изменения (ошибки устройств, потеря связи, подключение) публикуются в **Apache Kafka**.
 * Внешние сервисы (Telegram Bot) подписываются на топик и реагируют независимо.
-
 
 * **Security First:**
 * **Traffic:** Шифрование **AES-128 (GCM)** для всего трафика устройств.
 * **Network:** `DeviceHandshakeInterceptor` блокирует неавторизованные устройства на уровне TCP-рукопожатия.
 * **Admin API:** Защита через `X-Admin-Key`.
-
-
 
 ---
 
@@ -33,7 +29,6 @@
 * **Protocols:**
 * **WebSocket (Secure):** Двусторонний обмен зашифрованными данными.
 * **HTTP REST:** API управления.
-
 
 * **Testing:** Testcontainers (Postgres, Kafka), Mockito.
 
@@ -50,16 +45,12 @@
 * Сервер дешифрует, обновляет `lastSeen` и параметры в RAM.
 * **Анализ:** Если в JSON есть поля `errors` или `events`, сервер генерирует соответствующие события (`DEVICE_ERROR`, `DEVICE_EVENT`) в Kafka.
 
-
-
 ### 2. Мониторинг Связи (Watchdog & Dead Man's Switch)
 
 1. **Polling:** Фоновый процесс (`DeviceConnectivityWatchdog`) каждые 10 сек сканирует все активные устройства.
 2. **Detection:**
 * Если устройство `Online`, но молчит > 60 сек -> Перевод в `Offline`, событие `CONNECTION_LOST_TIMEOUT` (переход состояния).
 * Если устройство уже `Offline` и продолжает молчать -> Периодическое событие `CONNECTION_NOT_FOUND` (Heartbeat of failure) для напоминания.
-
-
 3. **Socket Close:** Если сокет закрыт явно (RST/FIN), генерируется событие `CONNECTION_BROKEN`.
 
 ### 3. Маршрутизация Уведомлений (Bot Interaction)
@@ -375,39 +366,51 @@ src/main/java/com/blinkoff/iot
 
 ```text
 src/test/java/com/blinkoff/iot
+├── AbstractRedisTest.java              // 🛠 BASE: Конфигурация Testcontainers (поднимает Redis для тестов).
+│
 ├── shared
 │   └── security
-│       ├── AdminAuthInterceptorTest.java       // ✅ UNIT: Проверка доступа по ключу (X-Admin-Key).
+│       ├── AdminAuthInterceptorTest.java       // ✅ UNIT: Проверка доступа по ключу.
 │       └── crypto
-│           └── AesCryptoEngineTest.java        // ✅ UNIT: AES-GCM шифрование/дешифрование.
+│           └── AesCryptoEngineTest.java        // ✅ UNIT: AES-GCM шифрование.
 │
 └── modules
     ├── device_management
     │   ├── service
-    │   │   ├── DeviceProvisioningServiceTest.java // ✅ UNIT: Регистрация, Блокировка, Разблокировка.
-    │   │   ├── DeviceBindingServiceTest.java      // ✅ UNIT: Обмен токена, Фильтрация по PlatformType.
-    │   │   └── DeviceDataServiceTest.java         // ✅ UNIT: Приоритет данных (RAM vs DB).
+    │   │   ├── DeviceProvisioningServiceTest.java // ✅ UNIT: Бизнес-логика (Mock Repos).
+    │   │   ├── DeviceBindingServiceTest.java      // ✅ UNIT: Логика привязки и фильтрации.
+    │   │   └── DeviceDataServiceTest.java         // ✅ UNIT: Сборка DTO.
     │   ├── store
-    │   │   └── ProvisioningTokenStoreTest.java    // ✅ UNIT: Генерация и потребление токенов.
+    │   │   └── ProvisioningTokenStoreTest.java    // 🐳 REDIS: Проверка записи, чтения и TTL токенов.
     │   ├── controller
-    │   │   └── DeviceProvisioningControllerTest.java // ✅ WEB: Эндпоинты (включая новый /owners), Mock сервисов.
+    │   │   └── DeviceProvisioningControllerTest.java // ✅ WEB: MockMvc тесты API.
     │   ├── repository
-    │   │   ├── DeviceRepositoryTest.java          // 🐢 INTEG: Поиск JSONB.
-    │   │   └── DeviceBindingRepositoryTest.java   // 🐢 INTEG: Constraints, удаление по ChipId.
+    │   │   ├── DeviceRepositoryTest.java          // 🐢 INTEG: JPA/SQL запросы.
+    │   │   └── DeviceBindingRepositoryTest.java   // 🐢 INTEG: Constraints, кастомные query.
     │
-    ├── notification                            // 🔔 NOTIFICATION (Kafka)
+    ├── notification
     │   └── kafka
-    │       └── AlarmProducerTest.java             // ✅ UNIT: Проверка отправки DTO в KafkaTemplate.
+    │       └── AlarmProducerTest.java             // ✅ UNIT: Проверка вызова KafkaTemplate (Mock).
     │
     └── telemetry
-        ├── DeviceIntegrationTest.java             // 🚀 E2E: Интеграционный тест полного цикла (опционально).
         ├── api
         │   └── device_facing
-        │       └── DeviceHandlerTest.java         // ✅ UNIT: WebSocket Flow + Отправка событий (Error/Event/Broken).
+        │       └── DeviceHandlerTest.java         // ✅ UNIT: WebSocket логика + Mock RedisStore.
+        ├── service
+        │   └── DeviceAuthCacheTest.java           // 🐳 REDIS: Whitelist (Set operations).
+        ├── store
+        │   └── RedisDeviceStateStoreTest.java     // 🐳 REDIS: Проверка Hash-структур, JSON-сериализации.
         ├── engine
-        │   ├── StateSyncServiceTest.java          // ✅ UNIT: Прогрев кэша (WarmUp) и восстановление (Restore).
-        │   └── DeviceConnectivityWatchdogTest.java// ✅ UNIT: Логика таймаутов и статуса "Not Found".
+        │   ├── StateSyncServiceTest.java          // ✅ UNIT: Логика синхронизации (Mock Store & Repo).
+        │   └── DeviceConnectivityWatchdogTest.java// ✅ UNIT: Логика таймаутов (Mock Store).
         └── repository
-            └── DeviceStateRepositoryTest.java     // 🐢 INTEG: Сохранение состояний в БД.
+            └── DeviceStateRepositoryTest.java     // 🐢 INTEG: JPA запросы (Postgres).
 
 ```
+
+### 🗝 Легенда:
+
+* ✅ **UNIT:** Быстрые тесты с моками (`Mockito`).
+* 🐢 **INTEG:** Тесты базы данных (`@DataJpaTest` + Testcontainers Postgres).
+* 🐳 **REDIS:** Тесты хранилищ (`@SpringBootTest` + Testcontainers Redis).
+* 🛠 **BASE:** Служебный класс для настройки окружения.
